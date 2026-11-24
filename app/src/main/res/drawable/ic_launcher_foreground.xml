@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Cute Bird Body -->
+    <path
+        android:fillColor="#FFD13B"
+        android:strokeColor="#4A3214"
+        android:strokeWidth="2.5"
+        android:pathData="M54,32 C68,32 76,41 76,53 C76,65 66,73 52,73 C38,73 30,64 30,53 C30,41 40,32 54,32 Z" />
+    <!-- Belly Highlight -->
+    <path
+        android:fillColor="#FFF0A8"
+        android:pathData="M48,58 C56,58 63,62 63,67 C63,70 57,72 50,72 C42,72 37,69 37,65 C37,61 42,58 48,58 Z" />
+    <!-- Wing -->
+    <path
+        android:fillColor="#FFF8D6"
+        android:strokeColor="#4A3214"
+        android:strokeWidth="2"
+        android:pathData="M34,50 C41,47 49,50 49,56 C49,61 43,64 36,63 C31,62 29,53 34,50 Z" />
+    <!-- Eye White -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#4A3214"
+        android:strokeWidth="2"
+        android:pathData="M61,40 A7,7 0 1,0 61,54 A7,7 0 1,0 61,40 Z" />
+    <!-- Pupil -->
+    <path
+        android:fillColor="#222222"
+        android:pathData="M63,44 A3,3 0 1,0 63,50 A3,3 0 1,0 63,44 Z" />
+    <!-- Beak -->
+    <path
+        android:fillColor="#F96B2B"
+        android:strokeColor="#4A3214"
+        android:strokeWidth="2"
+        android:pathData="M71,50 L84,54 L71,60 Z" />
+</vector>

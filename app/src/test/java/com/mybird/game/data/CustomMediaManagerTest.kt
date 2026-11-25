@@ -59,4 +59,35 @@ class CustomMediaManagerTest {
         assertEquals(0, cropTiny.left)
         assertEquals(0, cropTiny.top)
     }
+
+    @Test
+    fun birdCropPanBoundsAndPlacementMatchCircleGeometry() {
+        // 1:1 square at 1x zoom has zero pan slack; at 2x zoom allows +/-0.5 diameter pan
+        val (sqPanX1, sqPanY1) = CustomMediaManager.computeMaxBirdPanNormalized(512, 512, 1f)
+        assertEquals(0f, sqPanX1, 0.001f)
+        assertEquals(0f, sqPanY1, 0.001f)
+
+        val (sqPanX2, sqPanY2) = CustomMediaManager.computeMaxBirdPanNormalized(512, 512, 2f)
+        assertEquals(0.5f, sqPanX2, 0.001f)
+        assertEquals(0.5f, sqPanY2, 0.001f)
+
+        // 2:1 landscape at 1x zoom allows horizontal pan of +/-0.5 diameter and 0 vertical
+        val (widePanX, widePanY) = CustomMediaManager.computeMaxBirdPanNormalized(1000, 500, 1f)
+        assertEquals(0.5f, widePanX, 0.001f)
+        assertEquals(0f, widePanY, 0.001f)
+
+        // Excessive pan gets clamped so circle never exposes empty borders
+        val placement = CustomMediaManager.computeBirdCropPlacement(
+            srcWidth = 1000,
+            srcHeight = 500,
+            circleCenterX = 100f,
+            circleCenterY = 100f,
+            circleDiameter = 200f,
+            crop = BirdCropTransform(zoom = 1f, panNormX = 9f, panNormY = -5f)
+        )
+        assertEquals(400f, placement.width, 0.01f)
+        assertEquals(200f, placement.height, 0.01f)
+        assertEquals(0f, placement.left, 0.01f)
+        assertEquals(0f, placement.top, 0.01f)
+    }
 }

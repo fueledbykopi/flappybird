@@ -35,10 +35,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.mybird.game.audio.RetroSoundEngine
 import com.mybird.game.data.CustomMediaManager
 import com.mybird.game.data.GamePreferences
+import com.mybird.game.data.PendingBirdImage
 import com.mybird.game.engine.GameConfig
 import com.mybird.game.engine.GameEngine
 import com.mybird.game.engine.GamePhase
 import com.mybird.game.ui.canvas.GameCanvasRenderer
+import com.mybird.game.ui.components.BirdCropDialog
 import com.mybird.game.ui.components.GameOverOverlay
 import com.mybird.game.ui.components.LiveScoreCounter
 import com.mybird.game.ui.components.MainMenuOverlay
@@ -79,7 +81,9 @@ fun GameScreen() {
 
     var customBirdBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     var customBackgroundBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var pendingBirdImage by remember { mutableStateOf<PendingBirdImage?>(null) }
     var isLoadingBird by remember { mutableStateOf(false) }
+    var isSavingBirdCrop by remember { mutableStateOf(false) }
     var isLoadingBackground by remember { mutableStateOf(false) }
     var mediaError by remember { mutableStateOf<String?>(null) }
 
@@ -96,11 +100,10 @@ fun GameScreen() {
             isLoadingBird = true
             mediaError = null
             coroutineScope.launch {
-                mediaManager.importBirdPhoto(uri)
-                    .onSuccess { bitmap ->
+                mediaManager.loadBirdForCropping(uri)
+                    .onSuccess { pending ->
                         if (birdLoadVersion == requestVersion) {
-                            customBirdBitmap = bitmap
-                            frameTick++
+                            pendingBirdImage = pending
                         }
                     }
                     .onFailure { error ->
@@ -455,5 +458,60 @@ fun GameScreen() {
             onRetry = startNewRun,
             onBackToMenu = returnToMainMenu
         )
+
+        // Interactive circular fit/crop editor for custom bird photo before applying
+        val activePendingBird = pendingBirdImage
+        if (activePendingBird != null) {
+            BirdCropDialog(
+                pendingBird = activePendingBird,
+                isSaving = isSavingBirdCrop,
+                onRotate90 = {
+                    if (isSavingBirdCrop) return@BirdCropDialog
+                    val requestVersion = ++birdLoadVersion
+                    coroutineScope.launch {
+                        mediaManager.rotatePendingBird90(activePendingBird)
+                            .onSuccess { rotated ->
+                                if (birdLoadVersion == requestVersion) {
+                                    pendingBirdImage = rotated
+                                }
+                            }
+                    }
+                },
+                onCancel = {
+                    if (!isSavingBirdCrop) {
+                        pendingBirdImage = null
+                    }
+                },
+                onConfirm = { cropTransform ->
+                    val requestVersion = ++birdLoadVersion
+                    isSavingBirdCrop = true
+                    mediaError = null
+                    coroutineScope.launch {
+                        mediaManager.saveCroppedBirdPhoto(activePendingBird, cropTransform)
+                            .onSuccess { bitmap ->
+                                if (birdLoadVersion == requestVersion) {
+                                    customBirdBitmap = bitmap
+                                    pendingBirdImage = null
+                                    frameTick++
+                                }
+                            }
+                            .onFailure { error ->
+                                if (birdLoadVersion == requestVersion) {
+                                    val detail = error.message?.takeIf { it.isNotBlank() }
+                                    mediaError = if (detail != null) {
+                                        "Gagal memasang foto burung: $detail"
+                                    } else {
+                                        "Gagal memasang foto burung. Coba lagi."
+                                    }
+                                    pendingBirdImage = null
+                                }
+                            }
+                        if (birdLoadVersion == requestVersion) {
+                            isSavingBirdCrop = false
+                        }
+                    }
+                }
+            )
+        }
     }
 }

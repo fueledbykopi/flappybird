@@ -28,19 +28,33 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
+ * User-adjusted circular framing transform for a custom bird photo.
+ *
+ * - [zoom] = 1f fits the image's shorter side exactly to the circle diameter.
+ * - [panNormX] / [panNormY] are normalized offsets in units of the circle diameter
+ *   (positive X moves the image right, positive Y moves the image down).
+ */
+data class BirdCropTransform(
+    val zoom: Float = 1f,
+    val panNormX: Float = 0f,
+    val panNormY: Float = 0f
+)
+
+/**
+ * Decoded, upright custom bird image waiting for user pan/zoom/rotate adjustment
+ * before being cropped and saved as the active bird avatar.
+ */
+data class PendingBirdImage(
+    val uri: Uri,
+    val sourceBitmap: Bitmap,
+    val previewBitmap: ImageBitmap
+)
+
+/**
  * Loads, downsamples, EXIF-rotates, compresses, crops, and caches custom user photos
  * (both circular bird avatar and horizontally-scrollable background) chosen via
  * Android's Photo Picker (`PickVisualMedia`), Storage Access Framework (`OpenDocument`),
  * or `GetContent`.
- *
- * Key reliability guarantees:
- * - Reads the content URI stream ONCE into a temporary cache file so one-shot/cloud
- *   content providers never fail on repeated `openInputStream` calls.
- * - Uses `ImageDecoder` with `ALLOCATOR_SOFTWARE` on Android 9+ (API 28+) for full
- *   format support (JPG, PNG, WebP, HEIC, HEIF, AVIF, GIF) and automatic EXIF rotation,
- *   with a safe `BitmapFactory` + `ExifInterface` fallback for API 26–27 or edge formats.
- * - Uses atomic temp-file replacement when caching processed bitmaps.
- * - Avoids unsafe intermediate bitmap recycling and preserves aspect ratios cleanly.
  */
 class CustomMediaManager(
     context: Context,
@@ -55,14 +69,81 @@ class CustomMediaManager(
         get() = File(appContext.filesDir, BG_CACHE_FILE)
 
     /**
-     * Imports a user-chosen bird photo, takes persistable URI permission when supported,
-     * crops into a circular 256x256 ARGB_8888 sprite with a crisp outline, caches it locally,
-     * and persists the URI in [GamePreferences].
+     * Decodes a user-chosen bird photo into an upright software bitmap ready for
+     * interactive pan/zoom/rotate framing before applying it to the game.
      */
-    suspend fun importBirdPhoto(uri: Uri): Result<ImageBitmap> = withContext(Dispatchers.IO) {
+    suspend fun loadBirdForCropping(uri: Uri): Result<PendingBirdImage> = withContext(Dispatchers.IO) {
         runCatching {
             tryTakePersistablePermission(uri)
-            val circular = decodeCircularBirdFromUri(uri)
+            val decoded = decodeSoftwareBitmapFromUri(uri, reqMaxSide = BIRD_CROP_PREVIEW_MAX_PX)
+                ?: error("Format foto tidak didukung atau tidak bisa dibaca.")
+            PendingBirdImage(
+                uri = uri,
+                sourceBitmap = decoded,
+                previewBitmap = decoded.asImageBitmap()
+            )
+        }.onFailure { error ->
+            Log.e(TAG, "Failed to load bird photo for cropping from $uri", error)
+        }
+    }
+
+    /**
+     * Rotates a pending bird image 90 degrees clockwise on [Dispatchers.IO].
+     */
+    suspend fun rotatePendingBird90(pending: PendingBirdImage): Result<PendingBirdImage> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val matrix = Matrix().apply { postRotate(90f) }
+                val rotated = Bitmap.createBitmap(
+                    pending.sourceBitmap,
+                    0,
+                    0,
+                    pending.sourceBitmap.width,
+                    pending.sourceBitmap.height,
+                    matrix,
+                    true
+                )
+                PendingBirdImage(
+                    uri = pending.uri,
+                    sourceBitmap = rotated,
+                    previewBitmap = rotated.asImageBitmap()
+                )
+            }
+        }
+
+    /**
+     * Applies the user's [crop] framing to [pending], renders the circular 256x256
+     * bird sprite with its crisp white/dark outline, caches it atomically, and persists
+     * the URI in [GamePreferences].
+     */
+    suspend fun saveCroppedBirdPhoto(
+        pending: PendingBirdImage,
+        crop: BirdCropTransform
+    ): Result<ImageBitmap> = withContext(Dispatchers.IO) {
+        runCatching {
+            val circular = createCircularSprite(
+                source = pending.sourceBitmap,
+                sizePx = BIRD_AVATAR_PX,
+                crop = crop
+            )
+            writeBitmapAtomically(circular, cachedBirdFile, Bitmap.CompressFormat.PNG, 95)
+            preferences.setCustomBirdPhotoUri(pending.uri.toString())
+            circular.asImageBitmap()
+        }.onFailure { error ->
+            Log.e(TAG, "Failed to save cropped bird photo", error)
+        }
+    }
+
+    /**
+     * Direct import helper using default centered framing (kept for reload fallback).
+     */
+    suspend fun importBirdPhoto(
+        uri: Uri,
+        crop: BirdCropTransform = BirdCropTransform()
+    ): Result<ImageBitmap> = withContext(Dispatchers.IO) {
+        runCatching {
+            tryTakePersistablePermission(uri)
+            val circular = decodeCircularBirdFromUri(uri, crop)
                 ?: error("Format foto tidak didukung atau tidak bisa dibaca.")
 
             writeBitmapAtomically(circular, cachedBirdFile, Bitmap.CompressFormat.PNG, 95)
@@ -102,7 +183,8 @@ class CustomMediaManager(
                 if (cached != null) return@runCatching cached.asImageBitmap()
             }
             val savedUri = preferences.getCustomBirdPhotoUri() ?: return@runCatching null
-            val decoded = decodeCircularBirdFromUri(Uri.parse(savedUri)) ?: return@runCatching null
+            val decoded = decodeCircularBirdFromUri(Uri.parse(savedUri), BirdCropTransform())
+                ?: return@runCatching null
             writeBitmapAtomically(decoded, cachedBirdFile, Bitmap.CompressFormat.PNG, 95)
             decoded.asImageBitmap()
         }.onFailure { error ->
@@ -151,10 +233,11 @@ class CustomMediaManager(
         }
     }
 
-    private fun decodeCircularBirdFromUri(uri: Uri): Bitmap? {
-        val decoded = decodeSoftwareBitmapFromUri(uri, reqMaxSide = BIRD_AVATAR_PX * 2) ?: return null
+    private fun decodeCircularBirdFromUri(uri: Uri, crop: BirdCropTransform): Bitmap? {
+        val decoded = decodeSoftwareBitmapFromUri(uri, reqMaxSide = BIRD_CROP_PREVIEW_MAX_PX)
+            ?: return null
         return try {
-            createCircularSprite(decoded, BIRD_AVATAR_PX)
+            createCircularSprite(decoded, BIRD_AVATAR_PX, crop)
         } finally {
             if (!decoded.isRecycled) decoded.recycle()
         }
@@ -169,10 +252,6 @@ class CustomMediaManager(
         }
     }
 
-    /**
-     * Copies the picked URI to a temporary file in [Context.getCacheDir] using a single stream open,
-     * then decodes it into an upright software [Bitmap] (`ARGB_8888`).
-     */
     private fun decodeSoftwareBitmapFromUri(uri: Uri, reqMaxSide: Int): Bitmap? {
         val tempFile = copyUriToTempFile(uri) ?: return null
         try {
@@ -311,10 +390,14 @@ class CustomMediaManager(
     }
 
     /**
-     * Center-crops [source] into a circular sprite of [sizePx] x [sizePx] using a local
-     * [BitmapShader] matrix so no intermediate bitmaps are created or prematurely recycled.
+     * Renders [source] into a circular sprite of [sizePx] x [sizePx] using the exact same
+     * pan/zoom placement geometry as the interactive crop preview.
      */
-    private fun createCircularSprite(source: Bitmap, sizePx: Int): Bitmap {
+    private fun createCircularSprite(
+        source: Bitmap,
+        sizePx: Int,
+        crop: BirdCropTransform
+    ): Bitmap {
         val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
         val center = sizePx * 0.5f
@@ -322,15 +405,18 @@ class CustomMediaManager(
         val photoRadius = center - borderWidth
         val photoDiameter = photoRadius * 2f
 
-        val minDim = min(source.width, source.height).coerceAtLeast(1)
-        val cropX = (source.width - minDim) * 0.5f
-        val cropY = (source.height - minDim) * 0.5f
-        val scaleFactor = photoDiameter / minDim.toFloat()
+        val placement = computeBirdCropPlacement(
+            srcWidth = source.width,
+            srcHeight = source.height,
+            circleCenterX = center,
+            circleCenterY = center,
+            circleDiameter = photoDiameter,
+            crop = crop
+        )
 
         val shaderMatrix = Matrix().apply {
-            setTranslate(-cropX, -cropY)
-            postScale(scaleFactor, scaleFactor)
-            postTranslate(borderWidth, borderWidth)
+            setScale(placement.scale, placement.scale)
+            postTranslate(placement.left, placement.top)
         }
         val shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
             setLocalMatrix(shaderMatrix)
@@ -360,11 +446,6 @@ class CustomMediaManager(
         return output
     }
 
-    /**
-     * Resizes and center-crops [source] into a memory-safe background bitmap while preserving
-     * portrait, square, and landscape/panoramic aspect ratios and filling any transparent regions
-     * with a soft sky tint instead of black.
-     */
     private fun createBackgroundBitmap(source: Bitmap): Bitmap {
         val srcWidth = source.width.coerceAtLeast(1)
         val srcHeight = source.height.coerceAtLeast(1)
@@ -374,7 +455,6 @@ class CustomMediaManager(
 
         val output = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
-        // Neutral sky base prevents transparent PNG backgrounds from turning solid black in JPEG
         canvas.drawColor(BG_TRANSPARENCY_FALLBACK_COLOR)
 
         val srcRect = Rect(
@@ -421,18 +501,84 @@ class CustomMediaManager(
         val height: Int
     )
 
+    data class BirdCropPlacement(
+        val scale: Float,
+        val left: Float,
+        val top: Float,
+        val width: Float,
+        val height: Float
+    )
+
     companion object {
         private const val TAG = "CustomMediaManager"
         private const val BIRD_AVATAR_PX = 256
+        private const val BIRD_CROP_PREVIEW_MAX_PX = 1024
+        const val MIN_BIRD_CROP_ZOOM = 1.0f
+        const val MAX_BIRD_CROP_ZOOM = 4.0f
         internal const val BG_MAX_WIDTH_PX = 2160
         internal const val BG_MAX_HEIGHT_PX = 1080
         private const val BG_MIN_HEIGHT_PX = 480
-        internal const val BG_MIN_ASPECT = 0.45f // Up to 9:20 tall portrait wallpaper
-        internal const val BG_MAX_ASPECT = 2.50f // Up to 5:2 panoramic horizontal scroll
+        internal const val BG_MIN_ASPECT = 0.45f
+        internal const val BG_MAX_ASPECT = 2.50f
         private const val MAX_IMPORT_FILE_BYTES = 35L * 1024L * 1024L
         private const val BG_TRANSPARENCY_FALLBACK_COLOR = 0xFF7BE0EA.toInt()
         private const val BIRD_CACHE_FILE = "custom_bird_avatar.png"
         private const val BG_CACHE_FILE = "custom_background.jpg"
+
+        fun computeMaxBirdPanNormalized(
+            srcWidth: Int,
+            srcHeight: Int,
+            zoom: Float
+        ): Pair<Float, Float> {
+            val safeW = srcWidth.coerceAtLeast(1).toFloat()
+            val safeH = srcHeight.coerceAtLeast(1).toFloat()
+            val minDim = min(safeW, safeH)
+            val clampedZoom = zoom.coerceIn(MIN_BIRD_CROP_ZOOM, MAX_BIRD_CROP_ZOOM)
+            val maxPanX = max(0f, ((safeW / minDim) * clampedZoom - 1f) * 0.5f)
+            val maxPanY = max(0f, ((safeH / minDim) * clampedZoom - 1f) * 0.5f)
+            return maxPanX to maxPanY
+        }
+
+        fun clampBirdCropTransform(
+            srcWidth: Int,
+            srcHeight: Int,
+            crop: BirdCropTransform
+        ): BirdCropTransform {
+            val clampedZoom = crop.zoom.coerceIn(MIN_BIRD_CROP_ZOOM, MAX_BIRD_CROP_ZOOM)
+            val (maxPanX, maxPanY) = computeMaxBirdPanNormalized(srcWidth, srcHeight, clampedZoom)
+            return BirdCropTransform(
+                zoom = clampedZoom,
+                panNormX = crop.panNormX.coerceIn(-maxPanX, maxPanX),
+                panNormY = crop.panNormY.coerceIn(-maxPanY, maxPanY)
+            )
+        }
+
+        fun computeBirdCropPlacement(
+            srcWidth: Int,
+            srcHeight: Int,
+            circleCenterX: Float,
+            circleCenterY: Float,
+            circleDiameter: Float,
+            crop: BirdCropTransform
+        ): BirdCropPlacement {
+            val safeW = srcWidth.coerceAtLeast(1).toFloat()
+            val safeH = srcHeight.coerceAtLeast(1).toFloat()
+            val minDim = min(safeW, safeH)
+            val clamped = clampBirdCropTransform(srcWidth, srcHeight, crop)
+
+            val scale = (circleDiameter / minDim) * clamped.zoom
+            val scaledW = safeW * scale
+            val scaledH = safeH * scale
+            val left = circleCenterX + clamped.panNormX * circleDiameter - scaledW * 0.5f
+            val top = circleCenterY + clamped.panNormY * circleDiameter - scaledH * 0.5f
+            return BirdCropPlacement(
+                scale = scale,
+                left = left,
+                top = top,
+                width = scaledW,
+                height = scaledH
+            )
+        }
 
         internal fun calculateInSampleSize(width: Int, height: Int, reqMaxSide: Int): Int {
             var inSampleSize = 1

@@ -22,7 +22,6 @@ import com.mybird.game.engine.GameEngine
 import com.mybird.game.engine.PipePair
 import com.mybird.game.engine.SkyTheme
 import kotlin.math.ceil
-import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -100,9 +99,12 @@ class GameCanvasRenderer {
     ) {
         val skyHeightPx = (GameConfig.GROUND_Y * scale).roundToInt().coerceAtLeast(1)
         val bitmapAspect = bitmap.width.toFloat() / bitmap.height.toFloat().coerceAtLeast(1f)
-        val tileWidthPx = max(size.width, skyHeightPx * bitmapAspect).roundToInt().coerceAtLeast(1)
+        // Strictly preserve aspect ratio so portrait, square, and landscape photos never stretch
+        val tileWidthPx = (skyHeightPx * bitmapAspect).roundToInt().coerceAtLeast(1)
 
-        val offsetPx = ((scrollDistanceWorld * scale) % tileWidthPx).roundToInt()
+        val rawOffset = (scrollDistanceWorld * scale) % tileWidthPx.toFloat()
+        val normalizedOffset = if (rawOffset < 0f) rawOffset + tileWidthPx else rawOffset
+        val offsetPx = normalizedOffset.roundToInt()
         var drawX = -offsetPx
         val srcSize = IntSize(bitmap.width, bitmap.height)
         val dstSize = IntSize(tileWidthPx, skyHeightPx)

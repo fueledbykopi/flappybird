@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,18 +20,23 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Face
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Landscape
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PhotoLibrary
@@ -47,7 +53,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,6 +71,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.mybird.game.engine.GamePhase
 import com.mybird.game.engine.Medal
 
@@ -190,9 +200,13 @@ fun MainMenuOverlay(
     onResetBackgroundPhoto: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
+    var showImageGuide by remember { mutableStateOf(false) }
+
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -201,10 +215,10 @@ fun MainMenuOverlay(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 22.dp),
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
+                .padding(horizontal = 20.dp, vertical = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -264,6 +278,8 @@ fun MainMenuOverlay(
                 }
             }
 
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Bottom cartoon menu card: Start + Bird & Background customization
             Surface(
                 shape = RoundedCornerShape(26.dp),
@@ -273,8 +289,8 @@ fun MainMenuOverlay(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     // Primary CTA: Mulai Game
                     Button(
@@ -287,7 +303,7 @@ fun MainMenuOverlay(
                         border = BorderStroke(2.dp, CartoonOutline),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(56.dp)
+                            .height(54.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.PlayArrow,
@@ -302,10 +318,50 @@ fun MainMenuOverlay(
                         )
                     }
 
+                    // Header row for customization + Image Size Guide button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Kustomisasi Gambar",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFF6B563E)
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = Color(0xFFECE0C0),
+                            border = BorderStroke(1.dp, Color(0xFFCBB483)),
+                            modifier = Modifier.clickable { showImageGuide = true }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Info,
+                                    contentDescription = "Panduan Ukuran Gambar",
+                                    tint = CartoonOutline,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Panduan Gambar",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CartoonOutline
+                                )
+                            }
+                        }
+                    }
+
                     // Ubah Karakter (Circular Preview + Pilih Foto Burung)
                     CustomizationRowCard(
                         title = "Ubah Karakter",
                         subtitle = if (customBirdBitmap != null) "Foto burung aktif" else "Burung kartun kuning",
+                        fitTip = "Pas: 1:1 persegi (min. 256×256 px), objek di tengah & menghadap kanan (PNG/JPG)",
                         buttonLabel = "Pilih Foto Burung",
                         buttonColor = PopOrange,
                         hasCustom = customBirdBitmap != null,
@@ -324,6 +380,7 @@ fun MainMenuOverlay(
                     CustomizationRowCard(
                         title = "Ubah Background",
                         subtitle = if (customBackgroundBitmap != null) "Background custom aktif" else "Parallax gunung 2D",
+                        fitTip = "Pas: Landscape 16:9 / 2:1 (1920×1080 px) untuk scroll mulus, atau Portrait 9:16",
                         buttonLabel = "Pilih Background",
                         buttonColor = PopTeal,
                         hasCustom = customBackgroundBitmap != null,
@@ -339,16 +396,28 @@ fun MainMenuOverlay(
                     )
 
                     if (mediaError != null) {
-                        Text(
-                            text = mediaError,
-                            color = Color(0xFFC62828),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFFFEBEE),
+                            border = BorderStroke(1.dp, Color(0xFFEF9A9A)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = mediaError,
+                                color = Color(0xFFC62828),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    if (showImageGuide) {
+        ImageGuideDialog(onDismiss = { showImageGuide = false })
     }
 }
 
@@ -356,6 +425,7 @@ fun MainMenuOverlay(
 private fun CustomizationRowCard(
     title: String,
     subtitle: String,
+    fitTip: String,
     buttonLabel: String,
     buttonColor: Color,
     hasCustom: Boolean,
@@ -407,6 +477,13 @@ private fun CustomizationRowCard(
                 }
             }
 
+            Text(
+                text = fitTip,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                color = Color(0xFF5D4B36)
+            )
+
             Button(
                 onClick = onPick,
                 enabled = !isLoading,
@@ -428,6 +505,123 @@ private fun CustomizationRowCard(
                     text = buttonLabel,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImageGuideDialog(onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = CardCream,
+            border = BorderStroke(3.dp, CartoonOutline),
+            shadowElevation = 14.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Panduan Gambar Pas",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        color = CartoonOutline
+                    )
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Tutup",
+                            tint = CartoonOutline
+                        )
+                    }
+                }
+
+                GuideSectionCard(
+                    title = "Karakter Burung",
+                    accentColor = PopOrange,
+                    bullets = listOf(
+                        "Rasio 1:1 (persegi) — otomatis dipotong menjadi lingkaran dengan sayap & paruh.",
+                        "Ukuran ideal 512×512 px (minimal 256×256 px) agar tajam.",
+                        "Taruh wajah/objek di tengah (beri ruang ~15% dari pinggir) & idealnya menghadap ke kanan.",
+                        "Format: PNG (mendukung transparan), JPG, WebP, atau HEIC."
+                    )
+                )
+
+                GuideSectionCard(
+                    title = "Background Game",
+                    accentColor = PopTeal,
+                    bullets = listOf(
+                        "Terbaik: Landscape 16:9 atau 2:1 (mis. 1920×1080 px) untuk efek scroll horizontal yang mulus.",
+                        "Alternatif: Portrait 9:16 atau 2:3 (mis. 1080×1650 px) tetap proporsional tanpa gepeng.",
+                        "Area aman: 14% bagian bawah tertutup tanah/rumput, taruh pemandangan utama di 86% bagian atas.",
+                        "Format: JPG, PNG, WebP, atau HEIC. Pilih gambar yang tidak terlalu ramai agar pipa & skor tetap jelas."
+                    )
+                )
+
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = PopGreen,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Mengerti", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideSectionCard(
+    title: String,
+    accentColor: Color,
+    bullets: List<String>
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFFF3E6C6),
+        border = BorderStroke(1.5.dp, Color(0xFFD2BC8D)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = accentColor
+            ) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+            for (bullet in bullets) {
+                Text(
+                    text = "• $bullet",
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = CartoonOutline
                 )
             }
         }

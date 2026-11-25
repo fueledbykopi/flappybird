@@ -1,6 +1,8 @@
 package com.mybird.game.ui
 
 import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,8 +53,9 @@ import kotlinx.coroutines.launch
  *
  * - 60fps/120fps VSync-locked Coroutines loop (`withFrameNanos`) updating a draw-only `frameTick`
  * - Zero-latency touch handling (`awaitFirstDown`)
- * - Custom bird & background selection via Android Photo Picker (`PickVisualMedia`) + SAF
- * - Auto-loading saved media on `Dispatchers.IO` and auto-pausing on background lifecycle
+ * - Resilient custom bird & background selection via Android Photo Picker (`PickVisualMedia`),
+ *   SAF (`OpenDocument`), and `GetContent` fallbacks
+ * - Auto-loading saved media on `Dispatchers.IO` with race-condition protection and auto-pause
  */
 @Composable
 fun GameScreen() {
@@ -80,46 +83,127 @@ fun GameScreen() {
     var isLoadingBackground by remember { mutableStateOf(false) }
     var mediaError by remember { mutableStateOf<String?>(null) }
 
+    // Monotonic version counters prevent stale initial cache loads from overwriting new picks/resets
+    var birdLoadVersion by remember { mutableIntStateOf(0) }
+    var bgLoadVersion by remember { mutableIntStateOf(0) }
+
     // Primitive frame invalidation ticker read ONLY inside Canvas DrawScope
     var frameTick by remember { mutableLongStateOf(0L) }
 
-    // Photo Picker (PickVisualMedia) for Custom Bird Character
-    val birdPhotoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        isLoadingBird = true
-        mediaError = null
-        coroutineScope.launch {
-            mediaManager.importBirdPhoto(uri)
-                .onSuccess { bitmap ->
-                    customBirdBitmap = bitmap
-                    frameTick++
+    val handleBirdPicked: (Uri?) -> Unit = { uri ->
+        if (uri != null) {
+            val requestVersion = ++birdLoadVersion
+            isLoadingBird = true
+            mediaError = null
+            coroutineScope.launch {
+                mediaManager.importBirdPhoto(uri)
+                    .onSuccess { bitmap ->
+                        if (birdLoadVersion == requestVersion) {
+                            customBirdBitmap = bitmap
+                            frameTick++
+                        }
+                    }
+                    .onFailure { error ->
+                        if (birdLoadVersion == requestVersion) {
+                            val detail = error.message?.takeIf { it.isNotBlank() }
+                            mediaError = if (detail != null) {
+                                "Gagal memuat foto burung: $detail"
+                            } else {
+                                "Gagal memuat foto burung. Pilih gambar JPG/PNG/WebP yang valid."
+                            }
+                        }
+                    }
+                if (birdLoadVersion == requestVersion) {
+                    isLoadingBird = false
                 }
-                .onFailure {
-                    mediaError = "Gagal memuat foto burung. Coba pilih foto lain."
-                }
-            isLoadingBird = false
+            }
         }
     }
 
-    // Photo Picker (PickVisualMedia) for Custom Scrolling Background
+    val handleBackgroundPicked: (Uri?) -> Unit = { uri ->
+        if (uri != null) {
+            val requestVersion = ++bgLoadVersion
+            isLoadingBackground = true
+            mediaError = null
+            coroutineScope.launch {
+                mediaManager.importBackgroundPhoto(uri)
+                    .onSuccess { bitmap ->
+                        if (bgLoadVersion == requestVersion) {
+                            customBackgroundBitmap = bitmap
+                            frameTick++
+                        }
+                    }
+                    .onFailure { error ->
+                        if (bgLoadVersion == requestVersion) {
+                            val detail = error.message?.takeIf { it.isNotBlank() }
+                            mediaError = if (detail != null) {
+                                "Gagal memuat foto background: $detail"
+                            } else {
+                                "Gagal memuat foto background. Pilih gambar JPG/PNG/WebP yang valid."
+                            }
+                        }
+                    }
+                if (bgLoadVersion == requestVersion) {
+                    isLoadingBackground = false
+                }
+            }
+        }
+    }
+
+    // Custom Bird pickers (Photo Picker on Android 13+, SAF OpenDocument & GetContent fallbacks)
+    val birdPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = handleBirdPicked
+    )
+    val birdDocumentPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = handleBirdPicked
+    )
+    val birdGetContentPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = handleBirdPicked
+    )
+
+    // Custom Background pickers (Photo Picker on Android 13+, SAF OpenDocument & GetContent fallbacks)
     val bgPhotoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        isLoadingBackground = true
-        mediaError = null
-        coroutineScope.launch {
-            mediaManager.importBackgroundPhoto(uri)
-                .onSuccess { bitmap ->
-                    customBackgroundBitmap = bitmap
-                    frameTick++
-                }
-                .onFailure {
-                    mediaError = "Gagal memuat foto background. Coba pilih foto lain."
-                }
-            isLoadingBackground = false
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = handleBackgroundPicked
+    )
+    val bgDocumentPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = handleBackgroundPicked
+    )
+    val bgGetContentPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = handleBackgroundPicked
+    )
+
+    fun launchImagePicker(
+        photoPicker: ManagedActivityResultLauncher<PickVisualMediaRequest, Uri?>,
+        documentPicker: ManagedActivityResultLauncher<Array<String>, Uri?>,
+        getContentPicker: ManagedActivityResultLauncher<String, Uri?>
+    ) {
+        val usePhotoPicker = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(context)
+        if (usePhotoPicker) {
+            val launched = runCatching {
+                photoPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            }.isSuccess
+            if (launched) return
+        }
+
+        val docLaunched = runCatching {
+            documentPicker.launch(arrayOf("image/*"))
+        }.isSuccess
+        if (docLaunched) return
+
+        val contentLaunched = runCatching {
+            getContentPicker.launch("image/*")
+        }.isSuccess
+        if (!contentLaunched) {
+            mediaError = "Tidak ditemukan aplikasi Galeri atau File untuk memilih gambar."
         }
     }
 
@@ -144,15 +228,17 @@ fun GameScreen() {
         soundEngine.isEnabled = soundEnabled
         launch { soundEngine.initialize() }
         launch {
+            val initialVersion = birdLoadVersion
             val savedBird = mediaManager.loadSavedBirdAvatar()
-            if (savedBird != null) {
+            if (savedBird != null && birdLoadVersion == initialVersion) {
                 customBirdBitmap = savedBird
                 frameTick++
             }
         }
         launch {
+            val initialVersion = bgLoadVersion
             val savedBg = mediaManager.loadSavedBackground()
-            if (savedBg != null) {
+            if (savedBg != null && bgLoadVersion == initialVersion) {
                 customBackgroundBitmap = savedBg
                 frameTick++
             }
@@ -258,33 +344,6 @@ fun GameScreen() {
             }
         }
 
-        // Top HUD (Pause button in gameplay + Sound toggle)
-        TopHudBar(
-            phase = phase,
-            soundEnabled = soundEnabled,
-            onToggleSound = {
-                soundEnabled = !soundEnabled
-                soundEngine.isEnabled = soundEnabled
-                preferences.setSoundEnabled(soundEnabled)
-            },
-            onTogglePause = {
-                when (engine.phase) {
-                    GamePhase.PLAYING -> {
-                        engine.pause()
-                        phase = engine.phase
-                    }
-
-                    GamePhase.PAUSED -> {
-                        engine.resume()
-                        phase = engine.phase
-                    }
-
-                    else -> Unit
-                }
-            },
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
         // Large top-center score during gameplay
         if (phase == GamePhase.PLAYING || phase == GamePhase.PAUSED) {
             LiveScoreCounter(
@@ -310,34 +369,69 @@ fun GameScreen() {
                 onStartGame = startNewRun,
                 onPickBirdPhoto = {
                     mediaError = null
-                    birdPhotoPicker.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    launchImagePicker(
+                        photoPicker = birdPhotoPicker,
+                        documentPicker = birdDocumentPicker,
+                        getContentPicker = birdGetContentPicker
                     )
                 },
                 onResetBirdPhoto = {
                     mediaError = null
+                    birdLoadVersion++
+                    isLoadingBird = false
+                    customBirdBitmap = null
+                    frameTick++
                     coroutineScope.launch {
                         mediaManager.clearBirdPhoto()
-                        customBirdBitmap = null
-                        frameTick++
                     }
                 },
                 onPickBackgroundPhoto = {
                     mediaError = null
-                    bgPhotoPicker.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    launchImagePicker(
+                        photoPicker = bgPhotoPicker,
+                        documentPicker = bgDocumentPicker,
+                        getContentPicker = bgGetContentPicker
                     )
                 },
                 onResetBackgroundPhoto = {
                     mediaError = null
+                    bgLoadVersion++
+                    isLoadingBackground = false
+                    customBackgroundBitmap = null
+                    frameTick++
                     coroutineScope.launch {
                         mediaManager.clearBackgroundPhoto()
-                        customBackgroundBitmap = null
-                        frameTick++
                     }
                 }
             )
         }
+
+        // Top HUD sits above MainMenuOverlay so Sound Toggle stays interactive on the menu too
+        TopHudBar(
+            phase = phase,
+            soundEnabled = soundEnabled,
+            onToggleSound = {
+                soundEnabled = !soundEnabled
+                soundEngine.isEnabled = soundEnabled
+                preferences.setSoundEnabled(soundEnabled)
+            },
+            onTogglePause = {
+                when (engine.phase) {
+                    GamePhase.PLAYING -> {
+                        engine.pause()
+                        phase = engine.phase
+                    }
+
+                    GamePhase.PAUSED -> {
+                        engine.resume()
+                        phase = engine.phase
+                    }
+
+                    else -> Unit
+                }
+            },
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
 
         // Pause dialog
         if (phase == GamePhase.PAUSED) {

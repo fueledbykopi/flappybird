@@ -2,6 +2,7 @@ package com.mybird.game.ui
 
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -39,6 +40,7 @@ import com.mybird.game.data.PendingBirdImage
 import com.mybird.game.engine.GameConfig
 import com.mybird.game.engine.GameEngine
 import com.mybird.game.engine.GamePhase
+import com.mybird.game.engine.GameTheme
 import com.mybird.game.ui.canvas.GameCanvasRenderer
 import com.mybird.game.ui.components.BirdCropDialog
 import com.mybird.game.ui.components.GameOverOverlay
@@ -47,6 +49,7 @@ import com.mybird.game.ui.components.MainMenuOverlay
 import com.mybird.game.ui.components.PauseOverlay
 import com.mybird.game.ui.components.ReadyTapHint
 import com.mybird.game.ui.components.TopHudBar
+import com.mybird.game.ui.theme.MyBirdTheme
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -55,9 +58,10 @@ import kotlinx.coroutines.launch
  *
  * - 60fps/120fps VSync-locked Coroutines loop (`withFrameNanos`) updating a draw-only `frameTick`
  * - Zero-latency touch handling (`awaitFirstDown`)
- * - Resilient custom bird & background selection via Android Photo Picker (`PickVisualMedia`),
- *   SAF (`OpenDocument`), and `GetContent` fallbacks
- * - Auto-loading saved media on `Dispatchers.IO` with race-condition protection and auto-pause
+ * - 5 built-in themes (Blok M default, GTA 6, Cyberpunk, Karhutla Borneo, Original) with
+ *   per-theme characters, worlds, and synthesized audio packs
+ * - Resilient custom bird & background selection on Android 9 through latest Android
+ * - In-game Home icon & system Back button support
  */
 @Composable
 fun GameScreen() {
@@ -73,6 +77,7 @@ fun GameScreen() {
     val renderer = remember { GameCanvasRenderer() }
 
     // Discrete UI states (recompose only when values change)
+    var selectedTheme by remember { mutableStateOf(preferences.getSelectedTheme()) }
     var phase by remember { mutableStateOf(GamePhase.MENU) }
     var score by remember { mutableIntStateOf(0) }
     var bestScore by remember { mutableIntStateOf(preferences.getBestScore()) }
@@ -94,6 +99,12 @@ fun GameScreen() {
     // Primitive frame invalidation ticker read ONLY inside Canvas DrawScope
     var frameTick by remember { mutableLongStateOf(0L) }
 
+    // Keep engine theme synchronized with persisted selection
+    LaunchedEffect(selectedTheme) {
+        engine.setTheme(selectedTheme)
+        frameTick++
+    }
+
     val handleBirdPicked: (Uri?) -> Unit = { uri ->
         if (uri != null) {
             val requestVersion = ++birdLoadVersion
@@ -110,9 +121,9 @@ fun GameScreen() {
                         if (birdLoadVersion == requestVersion) {
                             val detail = error.message?.takeIf { it.isNotBlank() }
                             mediaError = if (detail != null) {
-                                "Gagal memuat foto burung: $detail"
+                                "Gagal memuat foto karakter: $detail"
                             } else {
-                                "Gagal memuat foto burung. Pilih gambar JPG/PNG/WebP yang valid."
+                                "Gagal memuat foto karakter. Pilih gambar JPG/PNG/WebP yang valid."
                             }
                         }
                     }
@@ -140,9 +151,9 @@ fun GameScreen() {
                         if (bgLoadVersion == requestVersion) {
                             val detail = error.message?.takeIf { it.isNotBlank() }
                             mediaError = if (detail != null) {
-                                "Gagal memuat foto background: $detail"
+                                "Gagal memuat background: $detail"
                             } else {
-                                "Gagal memuat foto background. Pilih gambar JPG/PNG/WebP yang valid."
+                                "Gagal memuat background. Pilih gambar JPG/PNG/WebP yang valid."
                             }
                         }
                     }
@@ -153,7 +164,7 @@ fun GameScreen() {
         }
     }
 
-    // Custom Bird pickers (Photo Picker on Android 13+, SAF OpenDocument & GetContent fallbacks)
+    // Custom Bird pickers (Photo Picker on Android 13+, SAF OpenDocument & GetContent fallbacks for Android 9-12)
     val birdPhotoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = handleBirdPicked
@@ -167,7 +178,7 @@ fun GameScreen() {
         onResult = handleBirdPicked
     )
 
-    // Custom Background pickers (Photo Picker on Android 13+, SAF OpenDocument & GetContent fallbacks)
+    // Custom Background pickers
     val bgPhotoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = handleBackgroundPicked
@@ -226,8 +237,35 @@ fun GameScreen() {
         frameTick++
     }
 
-    // Async initialization of synthesized SFX and persisted custom media on Dispatchers.IO
+    val selectTheme: (GameTheme) -> Unit = { theme ->
+        if (selectedTheme != theme) {
+            selectedTheme = theme
+            engine.setTheme(theme)
+            preferences.setSelectedTheme(theme)
+            soundEngine.playThemePreview(theme)
+            frameTick++
+        }
+    }
+
+    // Handle Android Back button cleanly during gameplay
+    BackHandler(enabled = phase != GamePhase.MENU) {
+        when (phase) {
+            GamePhase.PLAYING -> {
+                engine.pause()
+                phase = engine.phase
+            }
+
+            GamePhase.READY, GamePhase.PAUSED, GamePhase.GAME_OVER -> {
+                returnToMainMenu()
+            }
+
+            GamePhase.MENU -> Unit
+        }
+    }
+
+    // Async initialization of multi-theme synthesized SFX and persisted custom media on Dispatchers.IO
     LaunchedEffect(Unit) {
+        engine.setTheme(selectedTheme)
         soundEngine.isEnabled = soundEnabled
         launch { soundEngine.initialize() }
         launch {
@@ -288,10 +326,10 @@ fun GameScreen() {
 
                 if ((events and GameConfig.EVENT_SCORED) != 0) {
                     score = engine.score
-                    soundEngine.playScore()
+                    soundEngine.playScore(engine.activeTheme)
                 }
                 if ((events and GameConfig.EVENT_CRASHED) != 0) {
-                    soundEngine.playHit()
+                    soundEngine.playHit(engine.activeTheme)
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     val finalScore = engine.score
                     if (finalScore > bestScore) {
@@ -311,207 +349,218 @@ fun GameScreen() {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // High-FPS 2D Game Canvas with immediate ACTION_DOWN flap control
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        if (engine.phase == GamePhase.READY || engine.phase == GamePhase.PLAYING) {
-                            if (engine.flap()) {
-                                soundEngine.playFlap()
-                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                if (phase != engine.phase) {
-                                    isNewBest = false
-                                    score = engine.score
-                                    phase = engine.phase
+    MyBirdTheme(selectedTheme = selectedTheme) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // High-FPS 2D Game Canvas with immediate ACTION_DOWN flap control
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            if (engine.phase == GamePhase.READY || engine.phase == GamePhase.PLAYING) {
+                                if (engine.flap()) {
+                                    soundEngine.playFlap(engine.activeTheme)
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    if (phase != engine.phase) {
+                                        isNewBest = false
+                                        score = engine.score
+                                        phase = engine.phase
+                                    }
                                 }
                             }
                         }
                     }
-                }
-        ) {
-            // Read frameTick strictly inside DrawScope so only Canvas redraws at 60/120fps
-            @Suppress("UNUSED_VARIABLE")
-            val tick = frameTick
+            ) {
+                // Read frameTick strictly inside DrawScope so only Canvas redraws at 60/120fps
+                @Suppress("UNUSED_VARIABLE")
+                val tick = frameTick
 
-            engine.updateViewport(size.width, size.height)
-            with(renderer) {
-                render(
-                    engine = engine,
-                    customBirdBitmap = customBirdBitmap,
-                    customBackgroundBitmap = customBackgroundBitmap
+                engine.updateViewport(size.width, size.height)
+                with(renderer) {
+                    render(
+                        engine = engine,
+                        theme = selectedTheme,
+                        customBirdBitmap = customBirdBitmap,
+                        customBackgroundBitmap = customBackgroundBitmap
+                    )
+                }
+            }
+
+            // Large top-center score during gameplay
+            if (phase == GamePhase.PLAYING || phase == GamePhase.PAUSED) {
+                LiveScoreCounter(
+                    score = score,
+                    selectedTheme = selectedTheme,
+                    modifier = Modifier.align(Alignment.TopCenter)
                 )
             }
-        }
 
-        // Large top-center score during gameplay
-        if (phase == GamePhase.PLAYING || phase == GamePhase.PAUSED) {
-            LiveScoreCounter(
-                score = score,
+            // Ready tap prompt immediately after pressing "Mulai Main" or "Main Lagi"
+            if (phase == GamePhase.READY) {
+                ReadyTapHint(selectedTheme = selectedTheme)
+            }
+
+            // Clean modern Main Menu
+            if (phase == GamePhase.MENU) {
+                MainMenuOverlay(
+                    bestScore = bestScore,
+                    selectedTheme = selectedTheme,
+                    customBirdBitmap = customBirdBitmap,
+                    customBackgroundBitmap = customBackgroundBitmap,
+                    isLoadingBird = isLoadingBird,
+                    isLoadingBackground = isLoadingBackground,
+                    mediaError = mediaError,
+                    onSelectTheme = selectTheme,
+                    onStartGame = startNewRun,
+                    onPickBirdPhoto = {
+                        mediaError = null
+                        launchImagePicker(
+                            photoPicker = birdPhotoPicker,
+                            documentPicker = birdDocumentPicker,
+                            getContentPicker = birdGetContentPicker
+                        )
+                    },
+                    onResetBirdPhoto = {
+                        mediaError = null
+                        birdLoadVersion++
+                        isLoadingBird = false
+                        customBirdBitmap = null
+                        frameTick++
+                        coroutineScope.launch {
+                            mediaManager.clearBirdPhoto()
+                        }
+                    },
+                    onPickBackgroundPhoto = {
+                        mediaError = null
+                        launchImagePicker(
+                            photoPicker = bgPhotoPicker,
+                            documentPicker = bgDocumentPicker,
+                            getContentPicker = bgGetContentPicker
+                        )
+                    },
+                    onResetBackgroundPhoto = {
+                        mediaError = null
+                        bgLoadVersion++
+                        isLoadingBackground = false
+                        customBackgroundBitmap = null
+                        frameTick++
+                        coroutineScope.launch {
+                            mediaManager.clearBackgroundPhoto()
+                        }
+                    },
+                    onDismissMediaError = { mediaError = null }
+                )
+            }
+
+            // Top HUD bar with Home icon in playing/ready/paused + Pause + Sound toggle
+            TopHudBar(
+                phase = phase,
+                selectedTheme = selectedTheme,
+                soundEnabled = soundEnabled,
+                onToggleSound = {
+                    soundEnabled = !soundEnabled
+                    soundEngine.isEnabled = soundEnabled
+                    preferences.setSoundEnabled(soundEnabled)
+                },
+                onTogglePause = {
+                    when (engine.phase) {
+                        GamePhase.PLAYING -> {
+                            engine.pause()
+                            phase = engine.phase
+                        }
+
+                        GamePhase.PAUSED -> {
+                            engine.resume()
+                            phase = engine.phase
+                        }
+
+                        else -> Unit
+                    }
+                },
+                onBackToMenu = returnToMainMenu,
                 modifier = Modifier.align(Alignment.TopCenter)
             )
-        }
 
-        // Ready tap prompt immediately after pressing "Mulai Game" or "Main Lagi"
-        if (phase == GamePhase.READY) {
-            ReadyTapHint()
-        }
-
-        // Main Menu (Logo, High Score, Start, Custom Bird & Custom Background)
-        if (phase == GamePhase.MENU) {
-            MainMenuOverlay(
-                bestScore = bestScore,
-                customBirdBitmap = customBirdBitmap,
-                customBackgroundBitmap = customBackgroundBitmap,
-                isLoadingBird = isLoadingBird,
-                isLoadingBackground = isLoadingBackground,
-                mediaError = mediaError,
-                onStartGame = startNewRun,
-                onPickBirdPhoto = {
-                    mediaError = null
-                    launchImagePicker(
-                        photoPicker = birdPhotoPicker,
-                        documentPicker = birdDocumentPicker,
-                        getContentPicker = birdGetContentPicker
-                    )
-                },
-                onResetBirdPhoto = {
-                    mediaError = null
-                    birdLoadVersion++
-                    isLoadingBird = false
-                    customBirdBitmap = null
-                    frameTick++
-                    coroutineScope.launch {
-                        mediaManager.clearBirdPhoto()
-                    }
-                },
-                onPickBackgroundPhoto = {
-                    mediaError = null
-                    launchImagePicker(
-                        photoPicker = bgPhotoPicker,
-                        documentPicker = bgDocumentPicker,
-                        getContentPicker = bgGetContentPicker
-                    )
-                },
-                onResetBackgroundPhoto = {
-                    mediaError = null
-                    bgLoadVersion++
-                    isLoadingBackground = false
-                    customBackgroundBitmap = null
-                    frameTick++
-                    coroutineScope.launch {
-                        mediaManager.clearBackgroundPhoto()
-                    }
-                }
-            )
-        }
-
-        // Top HUD sits above MainMenuOverlay so Sound Toggle stays interactive on the menu too
-        TopHudBar(
-            phase = phase,
-            soundEnabled = soundEnabled,
-            onToggleSound = {
-                soundEnabled = !soundEnabled
-                soundEngine.isEnabled = soundEnabled
-                preferences.setSoundEnabled(soundEnabled)
-            },
-            onTogglePause = {
-                when (engine.phase) {
-                    GamePhase.PLAYING -> {
-                        engine.pause()
-                        phase = engine.phase
-                    }
-
-                    GamePhase.PAUSED -> {
+            // Pause dialog
+            if (phase == GamePhase.PAUSED) {
+                PauseOverlay(
+                    selectedTheme = selectedTheme,
+                    onResume = {
                         engine.resume()
                         phase = engine.phase
-                    }
+                    },
+                    onRestart = startNewRun,
+                    onBackToMenu = returnToMainMenu
+                )
+            }
 
-                    else -> Unit
-                }
-            },
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
-        // Pause dialog
-        if (phase == GamePhase.PAUSED) {
-            PauseOverlay(
-                onResume = {
-                    engine.resume()
-                    phase = engine.phase
-                },
-                onRestart = startNewRun,
+            // Game Over dialog
+            GameOverOverlay(
+                visible = phase == GamePhase.GAME_OVER,
+                selectedTheme = selectedTheme,
+                score = score,
+                bestScore = bestScore,
+                isNewBest = isNewBest,
+                medal = engine.currentMedal(),
+                onRetry = startNewRun,
                 onBackToMenu = returnToMainMenu
             )
-        }
 
-        // Cartoon Game Over Pop-up
-        GameOverOverlay(
-            visible = phase == GamePhase.GAME_OVER,
-            score = score,
-            bestScore = bestScore,
-            isNewBest = isNewBest,
-            medal = engine.currentMedal(),
-            onRetry = startNewRun,
-            onBackToMenu = returnToMainMenu
-        )
-
-        // Interactive circular fit/crop editor for custom bird photo before applying
-        val activePendingBird = pendingBirdImage
-        if (activePendingBird != null) {
-            BirdCropDialog(
-                pendingBird = activePendingBird,
-                isSaving = isSavingBirdCrop,
-                onRotate90 = {
-                    if (isSavingBirdCrop) return@BirdCropDialog
-                    val requestVersion = ++birdLoadVersion
-                    coroutineScope.launch {
-                        mediaManager.rotatePendingBird90(activePendingBird)
-                            .onSuccess { rotated ->
-                                if (birdLoadVersion == requestVersion) {
-                                    pendingBirdImage = rotated
-                                }
-                            }
-                    }
-                },
-                onCancel = {
-                    if (!isSavingBirdCrop) {
-                        pendingBirdImage = null
-                    }
-                },
-                onConfirm = { cropTransform ->
-                    val requestVersion = ++birdLoadVersion
-                    isSavingBirdCrop = true
-                    mediaError = null
-                    coroutineScope.launch {
-                        mediaManager.saveCroppedBirdPhoto(activePendingBird, cropTransform)
-                            .onSuccess { bitmap ->
-                                if (birdLoadVersion == requestVersion) {
-                                    customBirdBitmap = bitmap
-                                    pendingBirdImage = null
-                                    frameTick++
-                                }
-                            }
-                            .onFailure { error ->
-                                if (birdLoadVersion == requestVersion) {
-                                    val detail = error.message?.takeIf { it.isNotBlank() }
-                                    mediaError = if (detail != null) {
-                                        "Gagal memasang foto burung: $detail"
-                                    } else {
-                                        "Gagal memasang foto burung. Coba lagi."
+            // Interactive circular fit/crop editor for custom bird photo before applying
+            val activePendingBird = pendingBirdImage
+            if (activePendingBird != null) {
+                BirdCropDialog(
+                    pendingBird = activePendingBird,
+                    isSaving = isSavingBirdCrop,
+                    onRotate90 = {
+                        if (isSavingBirdCrop) return@BirdCropDialog
+                        val requestVersion = ++birdLoadVersion
+                        coroutineScope.launch {
+                            mediaManager.rotatePendingBird90(activePendingBird)
+                                .onSuccess { rotated ->
+                                    if (birdLoadVersion == requestVersion) {
+                                        pendingBirdImage = rotated
                                     }
-                                    pendingBirdImage = null
                                 }
+                        }
+                    },
+                    onCancel = {
+                        if (!isSavingBirdCrop) {
+                            pendingBirdImage = null
+                        }
+                    },
+                    onConfirm = { cropTransform ->
+                        val requestVersion = ++birdLoadVersion
+                        isSavingBirdCrop = true
+                        mediaError = null
+                        coroutineScope.launch {
+                            mediaManager.saveCroppedBirdPhoto(activePendingBird, cropTransform)
+                                .onSuccess { bitmap ->
+                                    if (birdLoadVersion == requestVersion) {
+                                        customBirdBitmap = bitmap
+                                        pendingBirdImage = null
+                                        frameTick++
+                                    }
+                                }
+                                .onFailure { error ->
+                                    if (birdLoadVersion == requestVersion) {
+                                        val detail = error.message?.takeIf { it.isNotBlank() }
+                                        mediaError = if (detail != null) {
+                                            "Gagal memasang foto karakter: $detail"
+                                        } else {
+                                            "Gagal memasang foto karakter. Coba lagi."
+                                        }
+                                        pendingBirdImage = null
+                                    }
+                                }
+                            if (birdLoadVersion == requestVersion) {
+                                isSavingBirdCrop = false
                             }
-                        if (birdLoadVersion == requestVersion) {
-                            isSavingBirdCrop = false
                         }
                     }
-                }
-            )
+                )
+            }
         }
     }
 }

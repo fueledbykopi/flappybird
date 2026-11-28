@@ -40,6 +40,7 @@ object GameConfig {
     const val MAX_DELTA_TIME = 0.05f // Prevent tunneling after background resume
     const val PIPE_POOL_SIZE = 6
     const val PARTICLE_POOL_SIZE = 36
+    const val AMBIENT_PARTICLE_COUNT = 22
     const val POPUP_POOL_SIZE = 6
     const val CLOUD_COUNT = 5
 

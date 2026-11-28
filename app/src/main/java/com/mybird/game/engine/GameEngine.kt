@@ -21,6 +21,9 @@ class GameEngine(
     var phase: GamePhase = GamePhase.MENU
         private set
 
+    var activeTheme: GameTheme = GameTheme.DEFAULT
+        private set
+
     var score: Int = 0
         private set
 
@@ -31,6 +34,9 @@ class GameEngine(
         private set
 
     var farMountainScrollOffset: Float = 0f
+        private set
+
+    var midSceneryScrollOffset: Float = 0f
         private set
 
     var nearMountainScrollOffset: Float = 0f
@@ -68,9 +74,73 @@ class GameEngine(
             speedFactor = 0.08f + (idx % 3) * 0.04f
         )
     }
+    val ambientParticles: Array<AmbientParticle> = Array(GameConfig.AMBIENT_PARTICLE_COUNT) { idx ->
+        AmbientParticle(
+            x = (idx * 73f) % GameConfig.DEFAULT_WORLD_WIDTH,
+            y = (idx * 97f) % GameConfig.GROUND_Y,
+            size = 2.5f + (idx % 4) * 1.4f,
+            speedX = -26f - (idx % 5) * 14f,
+            speedY = -28f - (idx % 4) * 16f,
+            phase = idx * 0.85f,
+            variant = idx % 3
+        )
+    }
 
     init {
+        reseedAmbientParticlesForTheme(activeTheme)
         resetToMenu()
+    }
+
+    fun setTheme(theme: GameTheme) {
+        if (activeTheme == theme) return
+        activeTheme = theme
+        reseedAmbientParticlesForTheme(theme)
+    }
+
+    private fun reseedAmbientParticlesForTheme(theme: GameTheme) {
+        for (i in ambientParticles.indices) {
+            val p = ambientParticles[i]
+            p.x = (i * 89f) % worldWidth.coerceAtLeast(GameConfig.MIN_WORLD_WIDTH)
+            p.y = (i * 113f) % GameConfig.GROUND_Y
+            p.phase = i * 0.77f
+            p.variant = i % 3
+            when (theme) {
+                GameTheme.KARHUTLA_BORNEO -> {
+                    // Rising glowing wildfire embers
+                    p.size = 2.6f + (i % 4) * 1.3f
+                    p.speedX = -38f - (i % 5) * 15f
+                    p.speedY = -52f - (i % 4) * 26f
+                }
+
+                GameTheme.CYBERPUNK -> {
+                    // Fast slanted neon rain streaks
+                    p.size = 1.8f + (i % 3) * 0.9f
+                    p.speedX = -95f - (i % 4) * 24f
+                    p.speedY = 420f + (i % 5) * 65f
+                }
+
+                GameTheme.BLOK_M -> {
+                    // Warm floating Jaksel street bokeh & kopi sparks
+                    p.size = 3.2f + (i % 4) * 1.8f
+                    p.speedX = -24f - (i % 4) * 10f
+                    p.speedY = -14f - (i % 3) * 8f
+                }
+
+                GameTheme.GTA6 -> {
+                    // Warm Vice sunset glitter & palm breeze motes
+                    p.size = 2.8f + (i % 4) * 1.2f
+                    p.speedX = -42f - (i % 4) * 14f
+                    p.speedY = -10f + (i % 3) * 8f
+                }
+
+                GameTheme.ORIGINAL -> {
+                    // Soft drifting sunlit air motes
+                    p.size = 2.2f + (i % 3) * 1.0f
+                    p.speedX = -28f - (i % 3) * 10f
+                    p.speedY = -6f + (i % 3) * 5f
+                }
+            }
+        }
     }
 
     /**
@@ -371,7 +441,8 @@ class GameEngine(
     private fun scrollEnvironment(speed: Float, dt: Float) {
         groundScrollOffset = (groundScrollOffset + speed * dt) % 64f
         farMountainScrollOffset = (farMountainScrollOffset + speed * 0.14f * dt) % 360f
-        nearMountainScrollOffset = (nearMountainScrollOffset + speed * 0.28f * dt) % 280f
+        midSceneryScrollOffset = (midSceneryScrollOffset + speed * 0.22f * dt) % 320f
+        nearMountainScrollOffset = (nearMountainScrollOffset + speed * 0.34f * dt) % 280f
         customBgScrollDistance += speed * 0.26f * dt
 
         for (cloud in clouds) {
@@ -379,6 +450,27 @@ class GameEngine(
             if (cloud.x + cloud.width < -20f) {
                 cloud.x = worldWidth + 40f + random.nextFloat() * 80f
                 cloud.y = 70f + random.nextFloat() * 240f
+            }
+        }
+
+        val maxW = worldWidth + 40f
+        for (ap in ambientParticles) {
+            ap.x += ap.speedX * dt
+            ap.y += ap.speedY * dt
+            if (ap.x < -30f) {
+                ap.x = maxW + random.nextFloat() * 35f
+                ap.y = if (activeTheme == GameTheme.KARHUTLA_BORNEO) {
+                    GameConfig.GROUND_Y - random.nextFloat() * 260f
+                } else {
+                    random.nextFloat() * GameConfig.GROUND_Y
+                }
+            }
+            if (ap.y < -25f) {
+                ap.y = GameConfig.GROUND_Y + random.nextFloat() * 15f
+                ap.x = random.nextFloat() * maxW
+            } else if (ap.y > GameConfig.GROUND_Y + 25f) {
+                ap.y = -15f - random.nextFloat() * 30f
+                ap.x = random.nextFloat() * maxW
             }
         }
     }
@@ -452,6 +544,7 @@ class GameEngine(
     }
 
     private fun spawnFlapParticles() {
+        val colors = activeTheme.flapParticleColors
         var spawned = 0
         for (p in particles) {
             if (p.active) continue
@@ -463,13 +556,14 @@ class GameEngine(
             p.size = 4.5f + random.nextFloat() * 4.5f
             p.maxLife = 0.34f + random.nextFloat() * 0.16f
             p.life = p.maxLife
-            p.colorArgb = if (spawned % 2 == 0) 0xFFFFF8D6 else 0xFFFFFFFF
+            p.colorArgb = colors[spawned % colors.size]
             spawned++
             if (spawned >= 4) break
         }
     }
 
     private fun spawnScoreSparkles() {
+        val colors = activeTheme.scoreParticleColors
         var spawned = 0
         for (p in particles) {
             if (p.active) continue
@@ -483,13 +577,14 @@ class GameEngine(
             p.size = 5f + random.nextFloat() * 3f
             p.maxLife = 0.45f
             p.life = p.maxLife
-            p.colorArgb = if (spawned % 2 == 0) 0xFFFFD54F else 0xFFFFF176
+            p.colorArgb = colors[spawned % colors.size]
             spawned++
             if (spawned >= 6) break
         }
     }
 
     private fun spawnCrashParticles() {
+        val colors = activeTheme.crashParticleColors
         var spawned = 0
         for (p in particles) {
             if (p.active) continue
@@ -503,11 +598,7 @@ class GameEngine(
             p.size = 6f + random.nextFloat() * 5f
             p.maxLife = 0.55f + random.nextFloat() * 0.25f
             p.life = p.maxLife
-            p.colorArgb = when (spawned % 3) {
-                0 -> 0xFFFF7043
-                1 -> 0xFFFFD54F
-                else -> 0xFFFFFFFF
-            }
+            p.colorArgb = colors[spawned % colors.size]
             spawned++
             if (spawned >= 12) break
         }

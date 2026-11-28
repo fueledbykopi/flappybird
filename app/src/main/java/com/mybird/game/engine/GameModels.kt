@@ -83,3 +83,13 @@ class CloudItem(
     var width: Float = 130f,
     var speedFactor: Float = 0.14f
 )
+
+class AmbientParticle(
+    var x: Float = 0f,
+    var y: Float = 0f,
+    var size: Float = 3f,
+    var speedX: Float = -30f,
+    var speedY: Float = -20f,
+    var phase: Float = 0f,
+    var variant: Int = 0
+)

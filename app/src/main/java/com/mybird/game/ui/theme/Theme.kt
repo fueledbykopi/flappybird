@@ -1,28 +1,31 @@
 package com.mybird.game.ui.theme
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-
-private val MyBirdColorScheme = lightColorScheme(
-    primary = Color(0xFFFFA726),
-    onPrimary = Color(0xFF2B1B07),
-    secondary = Color(0xFF26A69A),
-    onSecondary = Color.White,
-    tertiary = Color(0xFF66BB6A),
-    background = Color(0xFF4EC0CA),
-    surface = Color(0xFFFFF8E7),
-    onSurface = Color(0xFF2D2114),
-    surfaceVariant = Color(0xFFF3E7C9),
-    onSurfaceVariant = Color(0xFF5D4B36),
-    error = Color(0xFFE53935)
-)
+import com.mybird.game.engine.GameTheme
 
 @Composable
-fun MyBirdTheme(content: @Composable () -> Unit) {
+fun MyBirdTheme(
+    selectedTheme: GameTheme = GameTheme.DEFAULT,
+    content: @Composable () -> Unit
+) {
+    val style = selectedTheme.uiStyle()
+    val colorScheme = darkColorScheme(
+        primary = style.accent,
+        onPrimary = style.onAccent,
+        secondary = style.accentSecondary,
+        onSecondary = Color(0xFF0A1018),
+        background = Color(0xFF0D1120),
+        surface = Color(0xFF14192B),
+        onSurface = Color.White,
+        surfaceVariant = Color(0xFF1E253D),
+        onSurfaceVariant = Color(0xFFC9D1E3),
+        error = Color(0xFFFF5252)
+    )
     MaterialTheme(
-        colorScheme = MyBirdColorScheme,
+        colorScheme = colorScheme,
         content = content
     )
 }

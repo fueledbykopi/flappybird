@@ -1,4 +1,4 @@
-# MyBird 🐦
+# My Burung 🐦
 
 Game 2D Android Native bergaya **Flappy Bird** yang ringan, responsif, dan berjalan mulus di **60fps/120fps** menggunakan **Kotlin**, **Jetpack Compose**, **Canvas**, **Coroutines**, dan **Android Photo Picker (`PickVisualMedia`) / Storage Access Framework (SAF)** untuk kustomisasi foto karakter burung dan background.
 

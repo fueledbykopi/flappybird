@@ -293,12 +293,13 @@ fun MainMenuOverlay(
 
             // Clean modern title
             Text(
-                text = "MyBird",
+                text = "My Burung",
+                maxLines = 1,
                 style = TextStyle(
                     color = Color.White,
-                    fontSize = 48.sp,
+                    fontSize = 44.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 1.2.sp,
+                    letterSpacing = 1.sp,
                     shadow = Shadow(
                         color = style.titleGlow.copy(alpha = 0.7f),
                         offset = Offset(0f, 5f),
